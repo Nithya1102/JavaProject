@@ -1,0 +1,299 @@
+import java.awt.*;
+import java.awt.event.*;
+import java.sql.*;
+
+public class ExamSeatingSystem extends Frame implements ActionListener {
+
+    TextField rollField, nameField, deptField, seatField;
+    Choice hallChoice;
+    TextArea displayArea;
+    Button allocateBtn, viewAllBtn, viewByHallBtn, deleteBtn, clearBtn;
+    Connection conn;
+
+    final String[] DEFAULT_HALLS = {
+            "Hall A", "Hall B", "Hall C", "Hall D", "Hall E"
+    };
+
+    public ExamSeatingSystem() {
+        setTitle("Exam Seating Arrangement System");
+        setSize(750, 480);
+        setLayout(null);
+
+        Label heading = new Label("Exam Seating Arrangement System");
+        heading.setFont(new Font("Arial", Font.BOLD, 18));
+        heading.setBounds(200, 40, 400, 30);
+        add(heading);
+
+        Label rollLabel = new Label("Roll No:");
+        rollLabel.setBounds(80, 100, 80, 20);
+        add(rollLabel);
+        rollField = new TextField();
+        rollField.setBounds(180, 100, 200, 24);
+        add(rollField);
+
+        Label nameLabel = new Label("Student Name:");
+        nameLabel.setBounds(80, 140, 90, 20);
+        add(nameLabel);
+        nameField = new TextField();
+        nameField.setBounds(180, 140, 200, 24);
+        add(nameField);
+
+        Label deptLabel = new Label("Department:");
+        deptLabel.setBounds(80, 180, 90, 20);
+        add(deptLabel);
+        deptField = new TextField();
+        deptField.setBounds(180, 180, 200, 24);
+        add(deptField);
+
+        Label hallLabel = new Label("Exam Hall:");
+        hallLabel.setBounds(80, 220, 80, 20);
+        add(hallLabel);
+        hallChoice = new Choice();
+        hallChoice.setBounds(180, 220, 200, 24);
+        add(hallChoice);
+
+        Label seatLabel = new Label("Seat No:");
+        seatLabel.setBounds(80, 260, 80, 20);
+        add(seatLabel);
+        seatField = new TextField();
+        seatField.setBounds(180, 260, 200, 24);
+        add(seatField);
+
+        allocateBtn = new Button("Allocate Seat");
+        allocateBtn.setBounds(420, 100, 120, 30);
+        allocateBtn.addActionListener(this);
+        add(allocateBtn);
+
+        viewAllBtn = new Button("View All");
+        viewAllBtn.setBounds(420, 140, 120, 30);
+        viewAllBtn.addActionListener(this);
+        add(viewAllBtn);
+
+        viewByHallBtn = new Button("View by Hall");
+        viewByHallBtn.setBounds(550, 140, 120, 30);
+        viewByHallBtn.addActionListener(this);
+        add(viewByHallBtn);
+
+        deleteBtn = new Button("Delete (Roll No)");
+        deleteBtn.setBounds(420, 180, 250, 30);
+        deleteBtn.addActionListener(this);
+        add(deleteBtn);
+
+        clearBtn = new Button("Clear");
+        clearBtn.setBounds(420, 220, 250, 30);
+        clearBtn.addActionListener(this);
+        add(clearBtn);
+
+        displayArea = new TextArea();
+        displayArea.setBounds(80, 310, 600, 130);
+        add(displayArea);
+
+        connectAndInitDatabase();
+        loadHallsToChoice();
+
+        setVisible(true);
+        addWindowListener(new WindowAdapter() {
+            public void windowClosing(WindowEvent e) {
+                try { if (conn != null) conn.close(); } catch (Exception ex) { ex.printStackTrace(); }
+                System.exit(0);
+            }
+        });
+    }
+
+    private void connectAndInitDatabase() {
+        String user = "root";
+        String pass = "root";
+        String url = "jdbc:mysql://localhost:3306/?serverTimezone=UTC";
+
+        try {
+            Class.forName("com.mysql.cj.jdbc.Driver");
+            conn = DriverManager.getConnection(url, user, pass);
+
+            try (Statement s = conn.createStatement()) {
+                s.executeUpdate("CREATE DATABASE IF NOT EXISTS examdb");
+            }
+
+            conn.close();
+            conn = DriverManager.getConnection("jdbc:mysql://localhost:3306/examdb?serverTimezone=UTC", user, pass);
+
+            String createHalls =
+                    "CREATE TABLE IF NOT EXISTS halls (" +
+                            " hall_id INT AUTO_INCREMENT PRIMARY KEY," +
+                            " hall_name VARCHAR(100) UNIQUE NOT NULL)";
+            String createSeating =
+                    "CREATE TABLE IF NOT EXISTS seating (" +
+                            " roll_no VARCHAR(50) PRIMARY KEY," +
+                            " student_name VARCHAR(200) NOT NULL," +
+                            " department VARCHAR(100) NOT NULL," +
+                            " seat_no VARCHAR(20) NOT NULL," +
+                            " hall_id INT NOT NULL," +
+                            " FOREIGN KEY (hall_id) REFERENCES halls(hall_id) ON DELETE CASCADE ON UPDATE CASCADE)";
+
+            try (Statement s = conn.createStatement()) {
+                s.executeUpdate(createHalls);
+                s.executeUpdate(createSeating);
+            }
+
+            ensureDefaultHalls();
+
+            displayArea.setText("✅ Connected and initialized database (examdb).");
+
+        } catch (Exception e) {
+            displayArea.setText("❌ DB init failed: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private void ensureDefaultHalls() {
+        String sql = "INSERT IGNORE INTO halls (hall_name) VALUES (?)";
+        try (PreparedStatement pst = conn.prepareStatement(sql)) {
+            for (String hall : DEFAULT_HALLS) {
+                pst.setString(1, hall);
+                pst.executeUpdate();
+            }
+        } catch (SQLException e) {
+            System.err.println("Warning inserting default halls: " + e.getMessage());
+        }
+    }
+
+    private void loadHallsToChoice() {
+        hallChoice.removeAll();
+        try (Statement s = conn.createStatement();
+             ResultSet rs = s.executeQuery("SELECT hall_id, hall_name FROM halls ORDER BY hall_id")) {
+            while (rs.next()) {
+                hallChoice.add(rs.getInt("hall_id") + ":" + rs.getString("hall_name"));
+            }
+        } catch (Exception e) {
+            displayArea.setText("❌ Error loading halls: " + e.getMessage());
+        }
+    }
+
+    private int getSelectedHallId() {
+        String selected = hallChoice.getSelectedItem();
+        if (selected == null || !selected.contains(":")) return -1;
+        return Integer.parseInt(selected.split(":", 2)[0]);
+    }
+
+    public void actionPerformed(ActionEvent ae) {
+        Object src = ae.getSource();
+        if (src == allocateBtn) allocateSeat();
+        else if (src == viewAllBtn) viewAllSeating();
+        else if (src == viewByHallBtn) viewBySelectedHall();
+        else if (src == deleteBtn) deleteSeat();
+        else if (src == clearBtn) clearFields();
+    }
+
+    private void allocateSeat() {
+        String roll = rollField.getText().trim();
+        String name = nameField.getText().trim();
+        String dept = deptField.getText().trim();
+        String seat = seatField.getText().trim();
+        int hallId = getSelectedHallId();
+
+        if (roll.isEmpty() || name.isEmpty() || dept.isEmpty() || seat.isEmpty() || hallId == -1) {
+            displayArea.setText("⚠️ Please fill all fields properly.");
+            return;
+        }
+
+        String sql = "INSERT INTO seating (roll_no, student_name, department, seat_no, hall_id) VALUES (?, ?, ?, ?, ?)";
+        try (PreparedStatement pst = conn.prepareStatement(sql)) {
+            pst.setString(1, roll);
+            pst.setString(2, name);
+            pst.setString(3, dept);
+            pst.setString(4, seat);
+            pst.setInt(5, hallId);
+            pst.executeUpdate();
+            displayArea.setText("✅ Seat allocated successfully.");
+        } catch (SQLIntegrityConstraintViolationException ex) {
+            displayArea.setText("⚠️ Roll No already allocated a seat.");
+        } catch (SQLException ex) {
+            displayArea.setText("❌ Error allocating seat: " + ex.getMessage());
+        }
+    }
+
+    private void viewAllSeating() {
+        String sql = """
+                SELECT s.roll_no, s.student_name, s.department, s.seat_no, h.hall_name
+                FROM seating s JOIN halls h ON s.hall_id = h.hall_id
+                ORDER BY h.hall_name, s.roll_no
+                """;
+        try (Statement s = conn.createStatement();
+             ResultSet rs = s.executeQuery(sql)) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Roll No\tName\tDept\tSeat\tHall\n");
+            sb.append("---------------------------------------------------------------\n");
+            while (rs.next()) {
+                sb.append(rs.getString("roll_no")).append("\t")
+                        .append(rs.getString("student_name")).append("\t")
+                        .append(rs.getString("department")).append("\t")
+                        .append(rs.getString("seat_no")).append("\t")
+                        .append(rs.getString("hall_name")).append("\n");
+            }
+            displayArea.setText(sb.toString());
+        } catch (SQLException e) {
+            displayArea.setText("❌ Error fetching seating data: " + e.getMessage());
+        }
+    }
+
+    private void viewBySelectedHall() {
+        int hallId = getSelectedHallId();
+        if (hallId == -1) {
+            displayArea.setText("⚠️ No hall selected.");
+            return;
+        }
+        String hallName = hallChoice.getSelectedItem().split(":", 2)[1];
+        String sql = "SELECT roll_no, student_name, department, seat_no FROM seating WHERE hall_id = ? ORDER BY seat_no";
+
+        try (PreparedStatement pst = conn.prepareStatement(sql)) {
+            pst.setInt(1, hallId);
+            try (ResultSet rs = pst.executeQuery()) {
+                StringBuilder sb = new StringBuilder();
+                sb.append("Seating Arrangement - ").append(hallName).append("\n");
+                sb.append("Roll\tName\tDept\tSeat\n");
+                sb.append("-----------------------------------------\n");
+                boolean any = false;
+                while (rs.next()) {
+                    any = true;
+                    sb.append(rs.getString("roll_no")).append("\t")
+                            .append(rs.getString("student_name")).append("\t")
+                            .append(rs.getString("department")).append("\t")
+                            .append(rs.getString("seat_no")).append("\n");
+                }
+                if (!any) sb.append("No students allocated yet.\n");
+                displayArea.setText(sb.toString());
+            }
+        } catch (SQLException e) {
+            displayArea.setText("❌ Error fetching by hall: " + e.getMessage());
+        }
+    }
+
+    private void deleteSeat() {
+        String roll = rollField.getText().trim();
+        if (roll.isEmpty()) {
+            displayArea.setText("⚠️ Enter Roll No to delete the record.");
+            return;
+        }
+        String sql = "DELETE FROM seating WHERE roll_no = ?";
+        try (PreparedStatement pst = conn.prepareStatement(sql)) {
+            pst.setString(1, roll);
+            int rows = pst.executeUpdate();
+            if (rows > 0) displayArea.setText("🗑️ Seat allocation deleted successfully.");
+            else displayArea.setText("❌ Roll No not found.");
+        } catch (SQLException e) {
+            displayArea.setText("❌ Error deleting record: " + e.getMessage());
+        }
+    }
+
+    private void clearFields() {
+        rollField.setText("");
+        nameField.setText("");
+        deptField.setText("");
+        seatField.setText("");
+        if (hallChoice.getItemCount() > 0) hallChoice.select(0);
+        displayArea.setText("");
+    }
+
+    public static void main(String[] args) {
+        EventQueue.invokeLater(() -> new ExamSeatingSystem());
+    }
+}
